@@ -17,6 +17,7 @@ Called from:
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -904,3 +905,103 @@ async def write_extraction_to_ikg(
         logger.info(f"iKG write for {person_id}: {written} nodes written cleanly")
 
     return written, errors
+
+
+# ─────────────────────────────────────────────
+#  Generic fact dispatcher
+#  Called from profiles.py → update_profile()
+#  Routes any fact_type to the correct typed upsert above.
+# ─────────────────────────────────────────────
+
+async def upsert_fact_node(
+    driver: AsyncDriver,
+    *,
+    person_id: str,
+    tenant_id: str,
+    fact_type: str,
+    canonical: str,
+    raw: str,
+    confidence: float,
+    visibility: str = "match_engine_only",
+) -> None:
+    """
+    Routes a (fact_type, canonical, raw, confidence) tuple to the correct
+    typed iKG upsert function. Unknown types are skipped — never raises,
+    so one bad fact never blocks the rest of a profile update.
+
+    Supported fact_types:
+        skill | domain | topic | need | objective | offer | achievement | location
+    """
+    try:
+        if fact_type == "skill":
+            await upsert_skill(
+                driver, person_id=person_id,
+                skill_name=raw, canonical_name=canonical,
+                confidence=confidence, visibility=visibility,
+            )
+
+        elif fact_type == "domain":
+            await upsert_domain(
+                driver, person_id=person_id,
+                domain_name=raw, canonical_name=canonical,
+                confidence=confidence, visibility=visibility,
+            )
+
+        elif fact_type == "topic":
+            await upsert_topic(
+                driver, person_id=person_id,
+                topic_name=raw, canonical_name=canonical,
+                confidence=confidence, visibility=visibility,
+            )
+
+        elif fact_type == "need":
+            need_id = f"need_{person_id}_{canonical[:30]}"
+            await upsert_need(
+                driver, person_id=person_id,
+                need_id=need_id, text=raw,
+                urgency="medium", visibility=visibility,
+            )
+
+        elif fact_type == "objective":
+            obj_id = f"obj_{person_id}_{canonical[:30]}"
+            await upsert_objective(
+                driver, person_id=person_id,
+                objective_id=obj_id, text=raw,
+                urgency="medium", visibility=visibility,
+            )
+
+        elif fact_type == "offer":
+            offer_id = f"offer_{person_id}_{canonical[:30]}"
+            await upsert_offer(
+                driver, person_id=person_id,
+                offer_id=offer_id, text=raw,
+                confidence=confidence, visibility=visibility,
+            )
+
+        elif fact_type == "achievement":
+            ach_id = f"ach_{person_id}_{canonical[:30]}"
+            await upsert_achievement(
+                driver, person_id=person_id,
+                achievement_id=ach_id, text=raw,
+                confidence=confidence, visibility=visibility,
+            )
+
+        elif fact_type == "location":
+            parts = raw.replace(",", " ").split()
+            city = parts[-1] if parts else raw
+            await upsert_location(
+                driver, person_id=person_id,
+                site=raw, floor=None, city=city,
+            )
+
+        else:
+            logger.debug(
+                f"upsert_fact_node: unknown fact_type '{fact_type}' "
+                f"for person {person_id[:8]} — skipping"
+            )
+
+    except Exception as e:
+        logger.warning(
+            f"upsert_fact_node failed  person={person_id[:8]} "
+            f"type={fact_type} canonical={canonical}: {type(e).__name__}: {e}"
+        )
