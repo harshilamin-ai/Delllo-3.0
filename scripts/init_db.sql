@@ -43,7 +43,7 @@ CREATE TABLE user_profiles (
     default_visibility  TEXT NOT NULL DEFAULT 'match_engine_only'
                         CHECK (default_visibility IN ('private', 'match_engine_only', 'tenant_discoverable')),
     home_location       TEXT,                                 -- coarse location e.g. "Amsterdam HQ"
-    embedding           vector(1536),                        -- profile embedding for similarity
+    embedding           vector(768),                         -- profile embedding for similarity
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -59,7 +59,8 @@ CREATE TABLE documents (
     checksum     TEXT,                                        -- sha256 for dedup
     status       TEXT NOT NULL DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'ingested', 'parsed', 'extracted', 'failed')),
     meta_json    JSONB DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── Document Chunks ───────────────────────────────────────────────
@@ -69,7 +70,7 @@ CREATE TABLE document_chunks (
     chunk_index    INT  NOT NULL,
     text           TEXT NOT NULL,
     token_count    INT,
-    embedding      vector(1536),                             -- pgvector semantic embedding
+    embedding      vector(768),                             -- pgvector semantic embedding
     metadata_json  JSONB DEFAULT '{}',                       -- page number, headings, etc.
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -79,7 +80,10 @@ CREATE TABLE extracted_facts (
     fact_id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id             UUID NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
     user_id               UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    fact_type             TEXT NOT NULL CHECK (fact_type IN ('skill', 'domain', 'objective', 'offer', 'achievement', 'constraint')),
+    fact_type             TEXT NOT NULL CHECK (fact_type IN (
+                              'skill', 'domain', 'objective', 'offer', 'achievement',
+                              'constraint', 'need', 'topic', 'location'
+                          )),
     canonical_value       TEXT NOT NULL,                     -- normalized e.g. "ml_credit_pricing"
     raw_value             TEXT NOT NULL,                     -- extracted phrase verbatim
     confidence            NUMERIC(4,3) CHECK (confidence BETWEEN 0 AND 1),
@@ -90,7 +94,8 @@ CREATE TABLE extracted_facts (
                           CHECK (visibility IN ('private', 'match_engine_only', 'tenant_discoverable', 'mutual_match_only', 'public_event_only')),
     validated_by_user     BOOLEAN NOT NULL DEFAULT FALSE,
     validated_by_outcome  BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT extracted_facts_unique_fact UNIQUE (tenant_id, user_id, fact_type, canonical_value)
 );
 
 -- ── Live Signals ──────────────────────────────────────────────────
@@ -175,7 +180,7 @@ CREATE TABLE audit_log (
 --  INDEXES
 -- ─────────────────────────────────────────────
 
--- Vector similarity search on chunks
+-- Vector similarity search on chunks (768 dims for nomic-embed-text)
 CREATE INDEX idx_chunks_embedding       ON document_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX idx_profiles_embedding     ON user_profiles   USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
@@ -189,6 +194,9 @@ CREATE INDEX idx_matches_person_a       ON matches         (person_a, status);
 
 -- Active signals lookup
 CREATE INDEX idx_signals_active         ON live_signals    (tenant_id, user_id, signal_type) WHERE valid_to IS NULL;
+
+-- User status lookup for active-user queries
+CREATE INDEX idx_users_status           ON users           (tenant_id, status);
 
 -- Text search on facts
 CREATE INDEX idx_facts_canonical_trgm   ON extracted_facts USING gin (canonical_value gin_trgm_ops);

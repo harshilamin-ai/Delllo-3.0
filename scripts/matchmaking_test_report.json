@@ -1,0 +1,422 @@
+{
+  "run_at": "2026-04-14T08:54:04.961180+00:00",
+  "base_url": "http://localhost:8000",
+  "summary": {
+    "total": 63,
+    "passed": 41,
+    "failed": 20,
+    "known_broken": 5,
+    "pass_rate": "65.1%",
+    "duration_sec": 361.44
+  },
+  "results": [
+    {
+      "test": "Wipe (pre)",
+      "status": "FAIL",
+      "detail": "status=partial tables_wiped=0 real_errors=1",
+      "latency_ms": 88.6
+    },
+    {
+      "test": "GET /health",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 4.9
+    },
+    {
+      "test": "GET /health/live",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 4.4
+    },
+    {
+      "test": "GET /health/ready",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 13.0
+    },
+    {
+      "test": "GET /health/stack",
+      "status": "PASS",
+      "detail": "overall=ok  environment=development  ollama_model_target=qwen2.5:7b",
+      "latency_ms": 130.8
+    },
+    {
+      "test": "GET /v1/tenants",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 17.5
+    },
+    {
+      "test": "GET /v1/tenants/a1b2c3d4-0000-0000-0000-000000000001",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 11.4
+    },
+    {
+      "test": "POST /v1/users [Alice Chen]",
+      "status": "PASS",
+      "detail": "user_id=00000001-0000-0000-0000-000000000001",
+      "latency_ms": 76.0
+    },
+    {
+      "test": "POST /v1/users [Bob Martinez]",
+      "status": "PASS",
+      "detail": "user_id=00000002-0000-0000-0000-000000000001",
+      "latency_ms": 54.5
+    },
+    {
+      "test": "POST /v1/users [Clara Dubois]",
+      "status": "PASS",
+      "detail": "user_id=00000003-0000-0000-0000-000000000001",
+      "latency_ms": 56.4
+    },
+    {
+      "test": "POST /v1/users [David Okonkwo]",
+      "status": "PASS",
+      "detail": "user_id=00000004-0000-0000-0000-000000000001",
+      "latency_ms": 55.2
+    },
+    {
+      "test": "POST /v1/users [Eva Rossi]",
+      "status": "PASS",
+      "detail": "user_id=00000005-0000-0000-0000-000000000001",
+      "latency_ms": 56.1
+    },
+    {
+      "test": "POST /v1/users [Felix Wagner]",
+      "status": "PASS",
+      "detail": "user_id=00000006-0000-0000-0000-000000000001",
+      "latency_ms": 59.7
+    },
+    {
+      "test": "POST /v1/users [Grace Kim]",
+      "status": "PASS",
+      "detail": "user_id=00000007-0000-0000-0000-000000000001",
+      "latency_ms": 55.7
+    },
+    {
+      "test": "POST /v1/users [Hiro Tanaka]",
+      "status": "PASS",
+      "detail": "user_id=00000008-0000-0000-0000-000000000001",
+      "latency_ms": 55.5
+    },
+    {
+      "test": "POST /v1/users [Isabelle Moreau]",
+      "status": "PASS",
+      "detail": "user_id=00000009-0000-0000-0000-000000000001",
+      "latency_ms": 56.0
+    },
+    {
+      "test": "POST /v1/users [James OBrien]",
+      "status": "PASS",
+      "detail": "user_id=00000010-0000-0000-0000-000000000001",
+      "latency_ms": 55.9
+    },
+    {
+      "test": "GET /v1/users (list)",
+      "status": "PASS",
+      "detail": "11 users in DB",
+      "latency_ms": 20.3
+    },
+    {
+      "test": "GET profile (pre)",
+      "status": "PASS",
+      "detail": "HTTP 200 count=0",
+      "latency_ms": 9.0
+    },
+    {
+      "test": "GET facts (pre)",
+      "status": "PASS",
+      "detail": "HTTP 200 count=36",
+      "latency_ms": 11.8
+    },
+    {
+      "test": "GET 404 guard (pre)",
+      "status": "PASS",
+      "detail": "HTTP 404 count=0",
+      "latency_ms": 8.3
+    },
+    {
+      "test": "Ingest text [Alice Chen]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 103.5
+    },
+    {
+      "test": "Ingest text [Bob Martinez]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 35.0
+    },
+    {
+      "test": "Ingest text [Clara Dubois]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 32.0
+    },
+    {
+      "test": "Ingest text [David Okonkwo]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 32.8
+    },
+    {
+      "test": "Ingest text [Eva Rossi]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 30.2
+    },
+    {
+      "test": "Ingest text [Felix Wagner]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 30.3
+    },
+    {
+      "test": "Ingest text [Grace Kim]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 30.1
+    },
+    {
+      "test": "Ingest text [Hiro Tanaka]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 30.0
+    },
+    {
+      "test": "Ingest text [Isabelle Moreau]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 31.1
+    },
+    {
+      "test": "Ingest text [James OBrien]",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 29.8
+    },
+    {
+      "test": "LLM Extraction",
+      "status": "SKIP",
+      "detail": "No doc_ids (ingest failed)",
+      "latency_ms": 0
+    },
+    {
+      "test": "GET profile (post)",
+      "status": "PASS",
+      "detail": "HTTP 200 count=0",
+      "latency_ms": 16.6
+    },
+    {
+      "test": "GET facts (post)",
+      "status": "PASS",
+      "detail": "HTTP 200 count=36",
+      "latency_ms": 12.7
+    },
+    {
+      "test": "GET 404 guard (post)",
+      "status": "PASS",
+      "detail": "HTTP 404 count=0",
+      "latency_ms": 10.4
+    },
+    {
+      "test": "iKG person node",
+      "status": "PASS",
+      "detail": "HTTP 404",
+      "latency_ms": 6.1
+    },
+    {
+      "test": "iKG evidence",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 11.2
+    },
+    {
+      "test": "iKG signals (pre)",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 7.5
+    },
+    {
+      "test": "iKG upsert (sync)",
+      "status": "PASS",
+      "detail": "HTTP 200 nodes=37",
+      "latency_ms": 145.1
+    },
+    {
+      "test": "GET gKG transaction-types",
+      "status": "PASS",
+      "detail": "? type(s)",
+      "latency_ms": 6.0
+    },
+    {
+      "test": "Signal [Alice intent]",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 61.9
+    },
+    {
+      "test": "Signal [Alice presence]",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 57.3
+    },
+    {
+      "test": "Signal [Bob presence]",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 54.1
+    },
+    {
+      "test": "Signal [Eva availability]",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "latency_ms": 53.0
+    },
+    {
+      "test": "GET signals (post-write)",
+      "status": "PASS",
+      "detail": "intents=[{'created_at': '2026-04-14T08:48:05.082622+00:00', 'intent_id': 'intent_3748bfe6-e523-4ef2-821a-d85cd6b89daa', ",
+      "latency_ms": 7.0
+    },
+    {
+      "test": "Match generate [Alice Chen] (1st)",
+      "status": "PASS",
+      "detail": "matches_created=0 score_version=v2.0 \u26a0 (start Ollama + run without --skip-extract for facts)",
+      "latency_ms": 89.0
+    },
+    {
+      "test": "Match generate [Bob Martinez] (1st)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 76769.3
+    },
+    {
+      "test": "Match generate [Clara Dubois] (1st)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 29383.0
+    },
+    {
+      "test": "Match generate [David Okonkwo] (1st)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 33997.0
+    },
+    {
+      "test": "Match generate [Eva Rossi] (1st)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 28059.8
+    },
+    {
+      "test": "GET /v1/matches/recommended",
+      "status": "PASS",
+      "detail": "0 recommendation(s)",
+      "latency_ms": 27.0
+    },
+    {
+      "test": "Match accept/dismiss",
+      "status": "SKIP",
+      "detail": "no match_ids \u2014 run Ollama + extraction for real matches",
+      "latency_ms": 0
+    },
+    {
+      "test": "GET /v1/analytics/overview",
+      "status": "PASS",
+      "detail": "HTTP 200 tenant_id=a1b2c3d4-0000-0000-0000-000000000001  matches={'to",
+      "latency_ms": 29.4
+    },
+    {
+      "test": "GET /v1/analytics/top-skills",
+      "status": "PASS",
+      "detail": "HTTP 200 tenant_id=a1b2c3d4-0000-0000-0000-000000000001  top_facts={'",
+      "latency_ms": 11.2
+    },
+    {
+      "test": "GET /v1/analytics/match-quality",
+      "status": "PASS",
+      "detail": "HTTP 200 tenant_id=a1b2c3d4-0000-0000-0000-000000000001  score_histog",
+      "latency_ms": 15.7
+    },
+    {
+      "test": "GET /v1/analytics/coverage",
+      "status": "PASS",
+      "detail": "HTTP 200 tenant_id=a1b2c3d4-0000-0000-0000-000000000001  users=[{'use",
+      "latency_ms": 16.7
+    },
+    {
+      "test": "POST /v1/analytics/sweep",
+      "status": "KNOWN-BROKEN",
+      "detail": "users_processed=11 snapshots_updated=1 errors=10",
+      "latency_ms": 29.6
+    },
+    {
+      "test": "GET /ontology/a1b2c3d4-0000-0000-0000-000000000001/overrides",
+      "status": "KNOWN-BROKEN",
+      "detail": "HTTP 500 (expect [200, 201])",
+      "latency_ms": 55.9
+    },
+    {
+      "test": "POST /ontology/a1b2c3d4-0000-0000-0000-000000000001/overrides",
+      "status": "KNOWN-BROKEN",
+      "detail": "HTTP 500 (expect [200, 201])",
+      "latency_ms": 24.7
+    },
+    {
+      "test": "POST /ontology/a1b2c3d4-0000-0000-0000-000000000001/overrides",
+      "status": "KNOWN-BROKEN",
+      "detail": "HTTP 500 (expect [200, 201])",
+      "latency_ms": 16.9
+    },
+    {
+      "test": "POST /ontology/a1b2c3d4-0000-0000-0000-000000000001/overrides",
+      "status": "PASS",
+      "detail": "HTTP 400 (expect [400])",
+      "latency_ms": 8.6
+    },
+    {
+      "test": "GET /ontology/a1b2c3d4-0000-0000-0000-000000000001/effective-rules/tt_technical_problem_solving",
+      "status": "KNOWN-BROKEN",
+      "detail": "HTTP 500 (expect [200])",
+      "latency_ms": 18.7
+    },
+    {
+      "test": "Match generate [Alice Chen] (2nd \u2014 dismissed should not reappear)",
+      "status": "PASS",
+      "detail": "matches_created=0 score_version=v2.0 \u26a0 (start Ollama + run without --skip-extract for facts)",
+      "latency_ms": 29.5
+    },
+    {
+      "test": "Match generate [Bob Martinez] (2nd \u2014 dismissed should not reappear)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 29914.1
+    },
+    {
+      "test": "Match generate [Clara Dubois] (2nd \u2014 dismissed should not reappear)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 52367.4
+    },
+    {
+      "test": "Match generate [David Okonkwo] (2nd \u2014 dismissed should not reappear)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 26612.0
+    },
+    {
+      "test": "Match generate [Eva Rossi] (2nd \u2014 dismissed should not reappear)",
+      "status": "FAIL",
+      "detail": "HTTP 500 \u2014 {}",
+      "latency_ms": 82156.2
+    },
+    {
+      "test": "Wipe (post)",
+      "status": "FAIL",
+      "detail": "status=partial tables_wiped=0 real_errors=1",
+      "latency_ms": 61.9
+    }
+  ]
+}
