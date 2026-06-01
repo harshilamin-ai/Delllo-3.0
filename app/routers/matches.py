@@ -9,12 +9,18 @@ POST /v1/matches/{match_id}/dismiss    Dismiss + oKG update
 POST /v1/matches/{match_id}/feedback   Feedback + oKG outcome + learning sweep
 GET  /v1/matches/{match_id}/explanation LLM-generated explanation
 
-CHANGES vs previous version
-────────────────────────────
-• MatchGenerateRequest now accepts optional `active_users: List[str]`
-  When provided, matchmaking runs ONLY over that population (Node owns activity).
-  When absent, falls back to all active users in the tenant.
-• All IDs accept UUID or MongoDB ObjectID (24-char hex).
+CHANGES (org/network migration)
+────────────────────────────────
+• MatchGenerateRequest: tenant_id renamed to network_id.
+  tenant_id still accepted as a field alias for backward compatibility.
+• active_users validation: RAIN now queries user_tenants to confirm
+  every user in active_users is an active member of network_id.
+  Unrecognised / non-member users are silently filtered out (logged).
+• Fallback pool (no embeddings): the explicit-population branch no
+  longer filters by u.tenant_id (column removed); validates via
+  user_tenants instead.
+• Tenant-wide fallback: also switches to user_tenants membership
+  check instead of u.tenant_id = :tid AND u.status = 'active'.
 """
 
 import json
@@ -25,7 +31,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -64,21 +70,51 @@ def _norm(v: str) -> str:
 # ─────────────────────────────────────────────────────────────
 
 class MatchGenerateRequest(BaseModel):
-    tenant_id:           str
-    requesting_user_id:  str
-    transaction_types:   List[str]           = ["technical_problem_solving"]
-    active_users:        Optional[List[str]] = None   # ← NEW: Node-supplied population
-    max_candidates:      int                 = 20
-    min_score:           float               = 0.05
-    generate_explanations: bool              = True
-    constraints:         Dict[str, Any]      = {}
+    """
+    CHANGED: network_id replaces tenant_id.
+    tenant_id is still accepted as an alias for backward compatibility —
+    if both are sent, network_id takes precedence.
+    """
+    network_id:            Optional[str] = None   # preferred field
+    tenant_id:             Optional[str] = None   # backward-compat alias
+    requesting_user_id:    str
+    transaction_types:     List[str]           = ["technical_problem_solving"]
+    active_users:          Optional[List[str]] = None
+    max_candidates:        int                 = 20
+    min_score:             float               = 0.05
+    generate_explanations: bool                = True
+    constraints:           Dict[str, Any]      = {}
 
-    @field_validator("tenant_id", "requesting_user_id", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_network_id(cls, values):
+        """Accept tenant_id as alias for network_id; network_id wins if both present."""
+        nid = values.get("network_id")
+        tid = values.get("tenant_id")
+        if not nid and tid:
+            values["network_id"] = tid
+        if not values.get("network_id"):
+            raise ValueError("network_id (or tenant_id alias) is required")
+        return values
+
+    @field_validator("network_id", "requesting_user_id", mode="before")
     @classmethod
     def validate_ids(cls, v):
+        if v is None:
+            return v
         s = str(v)
         if not _is_valid(s):
             raise ValueError(f"Invalid ID format: '{s}'")
+        return _norm(s)
+
+    @field_validator("tenant_id", mode="before")
+    @classmethod
+    def validate_tenant_alias(cls, v):
+        if v is None:
+            return v
+        s = str(v)
+        if not _is_valid(s):
+            raise ValueError(f"Invalid tenant_id alias: '{s}'")
         return _norm(s)
 
     @field_validator("active_users", mode="before")
@@ -110,6 +146,43 @@ class MatchFeedbackRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────
+#  Membership validation helper
+# ─────────────────────────────────────────────────────────────
+
+async def _filter_to_network_members(
+    db: AsyncSession,
+    network_id: str,
+    user_ids: List[str],
+) -> List[str]:
+    """
+    Given a list of user_ids, return only those who are active members
+    of network_id according to user_tenants.
+    Non-members are silently filtered out (logged for observability).
+    """
+    if not user_ids:
+        return []
+
+    result = await db.execute(
+        text("""
+            SELECT user_id::text
+            FROM user_tenants
+            WHERE tenant_id = :nid
+              AND status    = 'active'
+              AND user_id   = ANY(:uids)
+        """),
+        {"nid": network_id, "uids": user_ids},
+    )
+    valid = {str(r["user_id"]) for r in result.mappings().all()}
+    dropped = [uid for uid in user_ids if uid not in valid]
+    if dropped:
+        logger.warning(
+            f"generate_matches: {len(dropped)} user(s) in active_users are not active "
+            f"members of network {network_id[:8]} — silently filtered: {dropped[:5]}"
+        )
+    return [uid for uid in user_ids if uid in valid]
+
+
+# ─────────────────────────────────────────────────────────────
 #  POST /v1/matches/generate
 # ─────────────────────────────────────────────────────────────
 
@@ -120,7 +193,8 @@ async def generate_matches(
 ):
     """
     Full Phase 2 pipeline:
-      1. Population   — use active_users list if provided, else all active in tenant
+      1. Population   — validate active_users against user_tenants membership;
+                        fall back to all active members of the network.
       2. Retrieval    — pgvector semantic search + gKG graph expansion
       3. Hard filter  — no open match, non-private facts
       4. Ranking      — 9-feature deterministic score
@@ -129,11 +203,11 @@ async def generate_matches(
       7. oKG write    — MatchRecommendation node in Memgraph
     """
     requester_id = req.requesting_user_id
-    tenant_id    = req.tenant_id
+    network_id   = req.network_id          # always set after model_validator
     tx_type      = req.transaction_types[0] if req.transaction_types else "knowledge_transfer"
 
     # ── Load requester profile ────────────────────────────────
-    requester_profile = await load_profile(db, requester_id, tenant_id)
+    requester_profile = await load_profile(db, requester_id, network_id)
 
     query_text = requester_profile.intent_text
     if not query_text:
@@ -146,43 +220,54 @@ async def generate_matches(
         query_text = tx_type.replace("_", " ")
 
     # ── Step 1: Candidate pool ────────────────────────────────
-    # If Node sent active_users, scope to that list.
-    # Otherwise use all active users in the tenant (legacy behaviour).
-    population_filter = req.active_users  # None = no restriction
+    # If Node sent active_users, validate membership then scope to that list.
+    # Otherwise use all active members of the network.
+    if req.active_users is not None:
+        population_filter = await _filter_to_network_members(
+            db, network_id, req.active_users
+        )
+        logger.info(
+            f"active_users: {len(req.active_users)} supplied → "
+            f"{len(population_filter)} validated network members"
+        )
+    else:
+        population_filter = None  # resolved below in fallback
 
     candidate_ids = await retrieve_candidates(
         db,
-        tenant_id=tenant_id,
+        tenant_id=network_id,
         requester_id=requester_id,
         query_text=query_text,
         transaction_type=tx_type,
         max_candidates=req.max_candidates * 3,
-        population=population_filter,       # ← passed through to retrieval
+        population=population_filter,
     )
 
     # Fallback pool when retrieval finds nothing (e.g. no embeddings yet)
     if not candidate_ids:
         logger.warning("Retrieval returned no candidates — using fallback pool")
 
-        if population_filter:
-            # Node gave us an explicit list — use it directly, no status filter needed
-            # (Node already decided these are the active users)
+        if population_filter is not None:
+            # Node gave us an explicit (now validated) list — use it directly
             pool_result = await db.execute(
                 text("""
                     SELECT DISTINCT u.user_id
                     FROM users u
+                    JOIN user_tenants ut
+                        ON ut.user_id   = u.user_id
+                       AND ut.tenant_id = :nid
+                       AND ut.status    = 'active'
                     WHERE u.user_id  = ANY(:pop)
                       AND u.user_id != :rid
-                      AND u.tenant_id = :tid
                       AND EXISTS (
                           SELECT 1 FROM extracted_facts ef
                           WHERE ef.user_id   = u.user_id
-                            AND ef.tenant_id = :tid
+                            AND ef.tenant_id = :nid
                             AND ef.visibility != 'private'
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM matches m
-                          WHERE m.tenant_id = :tid
+                          WHERE m.tenant_id = :nid
                             AND m.person_a  = :rid
                             AND m.person_b  = u.user_id
                             AND m.status NOT IN ('expired', 'dismissed')
@@ -192,57 +277,61 @@ async def generate_matches(
                 {
                     "pop":   population_filter,
                     "rid":   requester_id,
-                    "tid":   tenant_id,
+                    "nid":   network_id,
                     "limit": req.max_candidates * 3,
                 },
             )
         else:
-            # No explicit list — fall back to all active users in tenant
+            # No explicit list — fall back to all active members of the network
+            # CHANGED: uses user_tenants instead of u.tenant_id = :tid
             pool_result = await db.execute(
                 text("""
                     SELECT DISTINCT u.user_id
                     FROM users u
-                    WHERE u.tenant_id = :tid
-                      AND u.user_id  != :rid
+                    JOIN user_tenants ut
+                        ON ut.user_id   = u.user_id
+                       AND ut.tenant_id = :nid
+                       AND ut.status    = 'active'
+                    WHERE u.user_id  != :rid
                       AND u.status    = 'active'
                       AND EXISTS (
                           SELECT 1 FROM extracted_facts ef
                           WHERE ef.user_id   = u.user_id
-                            AND ef.tenant_id = :tid
+                            AND ef.tenant_id = :nid
                             AND ef.visibility != 'private'
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM matches m
-                          WHERE m.tenant_id = :tid
+                          WHERE m.tenant_id = :nid
                             AND m.person_a  = :rid
                             AND m.person_b  = u.user_id
                             AND m.status NOT IN ('expired', 'dismissed')
                       )
                     LIMIT :limit
                 """),
-                {"tid": tenant_id, "rid": requester_id, "limit": req.max_candidates * 3},
+                {"nid": network_id, "rid": requester_id, "limit": req.max_candidates * 3},
             )
 
         candidate_ids = [str(r["user_id"]) for r in pool_result.mappings().all()]
 
     if not candidate_ids:
         return {
-            "message":       "No candidates found.",
+            "message":         "No candidates found.",
             "matches_created": 0,
-            "matches":       [],
-            "score_version": "v2.0",
+            "matches":         [],
+            "score_version":   "v2.0",
         }
 
     # ── Step 2: Rank ──────────────────────────────────────────
     logger.info(
         f"Ranking {len(candidate_ids)} candidates for "
-        f"requester={requester_id[:8]} tenant={tenant_id[:8]} "
-        f"population={'explicit' if population_filter else 'tenant-wide'}"
+        f"requester={requester_id[:8]} network={network_id[:8]} "
+        f"population={'explicit' if req.active_users is not None else 'network-wide'}"
     )
     ranked = await rank_candidates(
         db,
         requester_id=requester_id,
-        tenant_id=tenant_id,
+        tenant_id=network_id,
         candidate_ids=candidate_ids,
         min_score=req.min_score,
     )
@@ -284,10 +373,10 @@ async def generate_matches(
                     (match_id, tenant_id, person_a, person_b,
                      transaction_type, score, status)
                 VALUES
-                    (:match_id, :tid, :pa, :pb, :tx_type, :score, 'recommended')
+                    (:match_id, :nid, :pa, :pb, :tx_type, :score, 'recommended')
             """),
             {
-                "match_id": match_id, "tid": tenant_id,
+                "match_id": match_id, "nid": network_id,
                 "pa": requester_id,   "pb": candidate_id,
                 "tx_type": tx_type,   "score": round(score, 4),
             },
@@ -313,8 +402,8 @@ async def generate_matches(
         explanation = {}
         if req.generate_explanations:
             try:
-                requester_p = await load_profile(db, requester_id, tenant_id)
-                candidate_p = await load_profile(db, candidate_id, tenant_id)
+                requester_p = await load_profile(db, requester_id, network_id)
+                candidate_p = await load_profile(db, candidate_id, network_id)
                 explanation = await generate_and_store_explanation(
                     db,
                     match_id=match_id,
@@ -334,7 +423,7 @@ async def generate_matches(
                 match_id=match_id,
                 person_a=requester_id,
                 person_b=candidate_id,
-                tenant_id=tenant_id,
+                tenant_id=network_id,
                 score=score,
                 transaction_type=tx_type,
             )
@@ -342,30 +431,30 @@ async def generate_matches(
             logger.warning(f"oKG write failed for match {match_id[:8]} (non-fatal): {e}")
 
         created_matches.append({
-            "match_id":        match_id,
-            "person_b":        candidate_id,
-            "candidate_name":  meta.get("display_name", ""),
+            "match_id":           match_id,
+            "person_b":           candidate_id,
+            "candidate_name":     meta.get("display_name", ""),
             "candidate_headline": meta.get("headline", ""),
-            "transaction_type": tx_type,
-            "score":           round(score, 4),
-            "score_breakdown": {k: round(v, 4) for k, v in bd.items() if k != "final_score"},
-            "explanation_text":    explanation.get("explanation_text"),
-            "agenda_text":         explanation.get("agenda_text"),
-            "opening_question":    explanation.get("opening_question"),
+            "transaction_type":   tx_type,
+            "score":              round(score, 4),
+            "score_breakdown":    {k: round(v, 4) for k, v in bd.items() if k != "final_score"},
+            "explanation_text":   explanation.get("explanation_text"),
+            "agenda_text":        explanation.get("agenda_text"),
+            "opening_question":   explanation.get("opening_question"),
         })
 
     await db.commit()
 
     logger.info(
         f"Generated {len(created_matches)} matches for {requester_id[:8]} "
-        f"(population={'explicit' if population_filter else 'tenant-wide'})"
+        f"(population={'explicit' if req.active_users is not None else 'network-wide'})"
     )
     return {
         "requesting_user_id": requester_id,
-        "tenant_id":          tenant_id,
+        "network_id":         network_id,
         "transaction_type":   tx_type,
-        "population_mode":    "explicit" if population_filter else "tenant-wide",
-        "population_size":    len(population_filter) if population_filter else None,
+        "population_mode":    "explicit" if req.active_users is not None else "network-wide",
+        "population_size":    len(population_filter) if population_filter is not None else None,
         "matches_created":    len(created_matches),
         "matches":            created_matches,
         "score_version":      "v2.0",
@@ -378,13 +467,13 @@ async def generate_matches(
 
 @router.get("/matches/recommended", summary="Get recommended matches for a user")
 async def get_recommended(
-    user_id:   str = Query(...),
-    tenant_id: str = Query(...),
-    limit:     int = Query(default=20, le=100),
+    user_id:    str = Query(...),
+    network_id: str = Query(...),
+    limit:      int = Query(default=20, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _norm(user_id)
-    tid = _norm(tenant_id)
+    nid = _norm(network_id)
     result = await db.execute(
         text("""
             SELECT
@@ -403,15 +492,15 @@ async def get_recommended(
             LEFT JOIN match_scores  ms ON ms.match_id = m.match_id
             LEFT JOIN explanations  e  ON e.match_id  = m.match_id
             WHERE m.person_a  = :uid
-              AND m.tenant_id = :tid
+              AND m.tenant_id = :nid
               AND m.status    = 'recommended'
             ORDER BY m.score DESC
             LIMIT :limit
         """),
-        {"uid": uid, "tid": tid, "limit": limit},
+        {"uid": uid, "nid": nid, "limit": limit},
     )
     rows = result.mappings().all()
-    return {"user_id": uid, "recommended": [dict(r) for r in rows], "count": len(rows)}
+    return {"user_id": uid, "network_id": nid, "recommended": [dict(r) for r in rows], "count": len(rows)}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -424,7 +513,7 @@ async def get_match(match_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         text("""
             SELECT
-                m.match_id, m.tenant_id, m.person_a, m.person_b,
+                m.match_id, m.tenant_id AS network_id, m.person_a, m.person_b,
                 m.transaction_type, m.score, m.status, m.created_at,
                 ua.display_name AS person_a_name,
                 ub.display_name AS person_b_name,
@@ -614,7 +703,7 @@ async def get_explanation(match_id: str, db: AsyncSession = Depends(get_db)):
     # Generate on demand
     match_result = await db.execute(
         text("""
-            SELECT m.tenant_id, m.person_a, m.person_b,
+            SELECT m.tenant_id AS network_id, m.person_a, m.person_b,
                    m.transaction_type, m.score,
                    ms.relevance, ms.complementarity, ms.timing,
                    ms.evidence_strength, ms.outcome_likelihood
@@ -629,8 +718,9 @@ async def get_explanation(match_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Match not found")
 
     try:
-        requester  = await load_profile(db, str(match_row["person_a"]), str(match_row["tenant_id"]))
-        candidate  = await load_profile(db, str(match_row["person_b"]), str(match_row["tenant_id"]))
+        network_id = str(match_row["network_id"])
+        requester  = await load_profile(db, str(match_row["person_a"]), network_id)
+        candidate  = await load_profile(db, str(match_row["person_b"]), network_id)
         explanation = await generate_and_store_explanation(
             db,
             match_id=mid,

@@ -67,9 +67,10 @@ async def get_overview(tenant_id: UUID, db: AsyncSession = Depends(get_db)):
     users = await db.execute(
         text("""
             SELECT
-                COUNT(*)                                                AS total_users,
-                COUNT(*) FILTER (WHERE status = 'active')              AS active_users
-            FROM users WHERE tenant_id = :tid
+                COUNT(*)                                                    AS total_users,
+                COUNT(*) FILTER (WHERE ut.status = 'active')               AS active_users
+            FROM user_tenants ut
+            WHERE ut.tenant_id = :tid
         """),
         {"tid": tid},
     )
@@ -264,14 +265,15 @@ async def get_coverage(tenant_id: UUID, db: AsyncSession = Depends(get_db)):
                     FILTER (WHERE m.status = 'accepted')               AS accepted_matches,
                 BOOL_OR(ef.fact_id IS NOT NULL)                        AS has_facts,
                 BOOL_OR(ls.signal_id IS NOT NULL AND ls.valid_to IS NULL) AS has_active_signal
-            FROM users u
+            FROM user_tenants ut
+            JOIN users u ON u.user_id = ut.user_id
             LEFT JOIN extracted_facts ef
                 ON ef.user_id = u.user_id AND ef.tenant_id = :tid
             LEFT JOIN live_signals ls
                 ON ls.user_id = u.user_id AND ls.tenant_id = :tid
             LEFT JOIN matches m
                 ON m.person_a = u.user_id AND m.tenant_id = :tid
-            WHERE u.tenant_id = :tid
+            WHERE ut.tenant_id = :tid AND ut.status = 'active'
             GROUP BY u.user_id, u.display_name, u.status
             ORDER BY fact_count DESC
         """),

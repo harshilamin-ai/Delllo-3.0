@@ -92,9 +92,10 @@ class ProfileUpdateRequest(BaseModel):
     Full profile update request from Node.
     user_profile   — what the person knows / has done
     user_objective — what they want right now
-    tenant_id      — required to scope fact writes
+    tenant_id / network_id — network context for fact scoping (either accepted)
     """
-    tenant_id:       str
+    tenant_id:       Optional[str] = None   # legacy field — still accepted
+    network_id:      Optional[str] = None   # new field — preferred
     user_profile:    Optional[NodeUserProfile]  = None
     user_objective:  Optional[UserObjective]    = None
 
@@ -284,8 +285,15 @@ async def update_profile(
     Returns fact counts by type.
     """
     uid = _norm(user_id)
-    tid = _norm(req.tenant_id) if _re.match(r'^[0-9a-f]{24}$', req.tenant_id, _re.I) \
-          else req.tenant_id
+
+    # Accept network_id as the new preferred field; tenant_id kept for back-compat
+    raw_tid = req.network_id or req.tenant_id
+    if not raw_tid:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'network_id' (preferred) or 'tenant_id' to scope fact writes."
+        )
+    tid = _norm(raw_tid) if _re.match(r'^[0-9a-f]{24}$', raw_tid, _re.I) else raw_tid
 
     # Verify user exists
     exists = await db.execute(
@@ -400,12 +408,12 @@ async def update_profile(
         type_counts[ftype] = type_counts.get(ftype, 0) + 1
 
     return {
-        "user_id":     uid,
-        "tenant_id":   tid,
+        "user_id":       uid,
+        "network_id":    tid,
         "facts_written": len(all_facts),
         "fact_breakdown": type_counts,
-        "ikg_synced":  ikg_synced,
-        "ikg_error":   ikg_error,
+        "ikg_synced":    ikg_synced,
+        "ikg_error":     ikg_error,
         "intent_posted": req.user_objective is not None,
     }
 

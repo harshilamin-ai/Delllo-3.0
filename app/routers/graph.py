@@ -51,9 +51,9 @@ async def upsert_ikg(
             SELECT u.display_name, p.headline
             FROM users u
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
-            WHERE u.user_id = :uid AND u.tenant_id = :tid
+            WHERE u.user_id = :uid
         """),
-        {"uid": user_id, "tid": tenant_id},
+        {"uid": user_id},
     )
     profile = profile_result.mappings().first()
     if not profile:
