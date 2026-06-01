@@ -669,8 +669,6 @@ async def upsert_match_recommendation(
             match_id=match_id, tt=transaction_type,
         )
         await r.consume()
-
-
 async def update_match_status(
     driver: AsyncDriver,
     *,
@@ -687,8 +685,6 @@ async def update_match_status(
             match_id=match_id, status=status, now=_now(),
         )
         await r.consume()
-
-
 async def upsert_interaction_outcome(
     driver: AsyncDriver,
     *,
@@ -719,12 +715,9 @@ async def upsert_interaction_outcome(
             match_id=match_id, outcome_id=outcome_id,
         )
         await r.consume()
-
-
 # ─────────────────────────────────────────────
 #  High-level orchestrator: iKG from extraction
 # ─────────────────────────────────────────────
-
 async def write_extraction_to_ikg(
     driver: AsyncDriver,
     *,

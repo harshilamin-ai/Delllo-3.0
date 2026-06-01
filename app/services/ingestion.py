@@ -411,14 +411,17 @@ async def ingest_document(
 
     logger.info(f"  ✓ Wrote {len(chunk_ids)} chunks to DB")
 
-    # Audit log
-    await db.execute(
-        text("""
-            INSERT INTO audit_log (tenant_id, actor_user_id, action, object_type, object_id)
-            VALUES (:tid, :uid, 'document_ingested', 'document', :doc_id)
-        """),
-        {"tid": tenant_id, "uid": user_id, "doc_id": document_id},
-    )
+    # Audit log (non-fatal — table may not exist in all environments)
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO audit_log (tenant_id, actor_user_id, action, object_type, object_id)
+                VALUES (:tid, :uid, 'document_ingested', 'document', :doc_id)
+            """),
+            {"tid": tenant_id, "uid": user_id, "doc_id": document_id},
+        )
+    except Exception as e:
+        logger.warning(f"audit_log write failed (non-fatal): {e}")
 
     return {
         "document_id":  document_id,
