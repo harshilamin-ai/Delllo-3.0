@@ -13,6 +13,7 @@ from app.routers import (
     health, tenants, profiles, signals,
     matches, ingestion, graph,
     analytics, ontology, admin,
+    organisations, memberships,
 )
 
 
@@ -57,5 +58,7 @@ app.include_router(matches.router,     prefix="/v1", tags=["matches"])
 app.include_router(ingestion.router,   prefix="/v1", tags=["ingestion"])
 app.include_router(graph.router,       prefix="/v1", tags=["graph"])
 app.include_router(analytics.router,   prefix="/v1", tags=["analytics"])
-app.include_router(ontology.router,    prefix="/v1", tags=["ontology"])
-app.include_router(diagnostics_router, prefix="/v1")
+app.include_router(ontology.router,       prefix="/v1", tags=["ontology"])
+app.include_router(organisations.router,  prefix="/v1", tags=["organisations"])
+app.include_router(memberships.router,    prefix="/v1", tags=["memberships"])
+app.include_router(diagnostics_router,    prefix="/v1")
