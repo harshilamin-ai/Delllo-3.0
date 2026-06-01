@@ -711,12 +711,9 @@ def test_match_actions(c: httpx.Client, match_ids: list) -> None:
               "feedback_type": "invalid_type",
               "payload":       {},
           }), 400)
-
-
 # ─────────────────────────────────────────────────────────────
 #  STEP 15 — Match detail + explanation
 # ─────────────────────────────────────────────────────────────
-
 def test_match_detail(c: httpx.Client, match_ids: list) -> None:
     step("STEP 15 — Match detail + explanation")
 
