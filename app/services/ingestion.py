@@ -287,25 +287,45 @@ async def write_chunks_to_db(
         if embedding:
             emb_str = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
 
-        await db.execute(
-            text("""
-                INSERT INTO document_chunks
-                    (chunk_id, document_id, chunk_index, text,
-                     token_count, embedding, metadata_json)
-                VALUES
-                    (:chunk_id, :doc_id, :idx, :text,
-                     :token_count,CAST(:embedding AS vector), CAST(:metadata AS jsonb))
-            """),
-            {
-                "chunk_id":    chunk_id,
-                "doc_id":      document_id,
-                "idx":         chunk["index"],
-                "text":        chunk["text"],
-                "token_count": chunk["token_count"],
-                "embedding":   emb_str,
-                "metadata":    json.dumps(chunk.get("metadata", {})),
-            },
-        )
+        if emb_str:
+            await db.execute(
+                text("""
+                    INSERT INTO document_chunks
+                        (chunk_id, document_id, chunk_index, text,
+                         token_count, embedding, metadata_json)
+                    VALUES
+                        (:chunk_id, :doc_id, :idx, :text,
+                         :token_count, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+                """),
+                {
+                    "chunk_id":    chunk_id,
+                    "doc_id":      document_id,
+                    "idx":         chunk["index"],
+                    "text":        chunk["text"],
+                    "token_count": chunk["token_count"],
+                    "embedding":   emb_str,
+                    "metadata":    json.dumps(chunk.get("metadata", {})),
+                },
+            )
+        else:
+            await db.execute(
+                text("""
+                    INSERT INTO document_chunks
+                        (chunk_id, document_id, chunk_index, text,
+                         token_count, metadata_json)
+                    VALUES
+                        (:chunk_id, :doc_id, :idx, :text,
+                         :token_count, CAST(:metadata AS jsonb))
+                """),
+                {
+                    "chunk_id":    chunk_id,
+                    "doc_id":      document_id,
+                    "idx":         chunk["index"],
+                    "text":        chunk["text"],
+                    "token_count": chunk["token_count"],
+                    "metadata":    json.dumps(chunk.get("metadata", {})),
+                },
+            )
 
     # Mark document as parsed
     await db.execute(

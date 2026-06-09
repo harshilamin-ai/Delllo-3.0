@@ -256,9 +256,10 @@ async def check_fact_coverage(
                     )                                                       AS engine_only_facts,
                     COALESCE(AVG(ef.confidence), 0)                        AS avg_confidence
                 FROM users u
+                JOIN user_tenants ut ON ut.user_id = u.user_id
                 LEFT JOIN extracted_facts ef
                     ON ef.user_id = u.user_id AND ef.tenant_id = :tid
-                WHERE u.tenant_id = :tid AND u.status = 'active'
+                WHERE ut.tenant_id = :tid AND ut.status = 'active'
                 GROUP BY u.user_id
             """),
             {"tid": tenant_id},
@@ -358,9 +359,10 @@ async def check_retrieval_sanity(
             text("""
                 SELECT DISTINCT u.user_id
                 FROM users u
+                JOIN user_tenants ut ON ut.user_id = u.user_id
                 JOIN extracted_facts ef
                     ON ef.user_id = u.user_id AND ef.tenant_id = :tid
-                WHERE u.tenant_id = :tid AND u.status = 'active'
+                WHERE ut.tenant_id = :tid AND ut.status = 'active'
                 LIMIT 1
             """),
             {"tid": tenant_id},

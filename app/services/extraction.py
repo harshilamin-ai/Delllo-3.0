@@ -362,11 +362,21 @@ async def extract_from_document(
             errors=["No chunks found. Run ingestion first."],
         )
 
+    MAX_EXTRACTION_CHARS = 12000   # was 6000 — doubled to avoid silently dropping publications, constraints, location
     combined_text = ""
+    truncated = False
     for chunk in chunks:
-        if len(combined_text) + len(chunk["text"]) > 6000:
+        if len(combined_text) + len(chunk["text"]) > MAX_EXTRACTION_CHARS:
+            truncated = True
             break
         combined_text += chunk["text"] + "\n\n"
+
+    if truncated:
+        logger.warning(
+            f"Extraction truncated at {MAX_EXTRACTION_CHARS} chars for "
+            f"doc={document_id} user={user_id} — later chunks (publications, "
+            f"constraints, location) may be missing."
+        )
 
     logger.info(f"Extracting doc={document_id} user={user_id} "
                 f"tenant={tenant_id} chars={len(combined_text):,}")

@@ -65,7 +65,7 @@ async def embed_text(text_input: str) -> Optional[List[float]]:
 
             data = resp.json()
 
-            # ✅ correct field: Ollama returns "embeddings" as [[floats]]
+            # correct field: Ollama returns "embeddings" as [[floats]]
             embeddings = data.get("embeddings")
             if not embeddings or not isinstance(embeddings, list) or not embeddings:
                 logger.warning(f"Full response: {data}")
@@ -151,7 +151,6 @@ async def semantic_candidate_search(
                 f"for tenant={tenant_id[:8]} — re-ingest with embed=True or run embedding backfill"
             )
 
-    # ✅ FIX 1: CAST(:vec AS vector) so pgvector accepts the string representation
     result = await safe_execute(
         db,
         text("""
@@ -203,7 +202,7 @@ async def graph_expand_candidates(
 
     # ── Memgraph path ──
     try:
-        async with driver.session() as session:   # ✅ async-safe
+        async with driver.session() as session:
             result = await session.run(
                 """
                 MATCH (pt:ProblemType)-[:MAPS_TO]->(tt:TransactionType {type_id: $type_id})
@@ -239,7 +238,6 @@ async def graph_expand_candidates(
         logger.warning(f"gKG failed → fallback to Postgres: {e}")
 
     # ── Postgres fallback ──
-    # Match on individual tokens OR the full underscore form (e.g. "technical_problem_solving")
     keywords = transaction_type.replace("_", " ").split()
 
     if not keywords:
@@ -288,7 +286,7 @@ async def graph_expand_candidates(
 
 
 # ─────────────────────────────────────────────
-# HARD FILTER
+# HARD FILTER  (Bug #11 fix: CAST list to text[])
 # ─────────────────────────────────────────────
 
 async def hard_filter(
@@ -302,7 +300,7 @@ async def hard_filter(
     """
     Filter candidates to those that are:
     - In the explicit population list if provided (Node-supplied active users)
-    - Otherwise status='active' in the tenant
+    - Otherwise active members of the tenant via user_tenants
     - Have non-private facts
     - No existing open match with the requester
     """
@@ -310,16 +308,16 @@ async def hard_filter(
         return []
 
     if population is not None:
-        # Node supplied an explicit active-user list — trust it, skip status check
-        # Still enforce: must be in candidate_ids, must have facts, no open match
         result = await safe_execute(
             db,
             text("""
                 SELECT DISTINCT u.user_id
                 FROM users u
-                WHERE u.tenant_id = :tid
-                  AND u.user_id::text = ANY(:candidate_ids)
-                  AND u.user_id::text = ANY(:population)
+                JOIN user_tenants ut ON ut.user_id = u.user_id
+                WHERE ut.tenant_id = :tid
+                  AND ut.status = 'active'
+                  AND u.user_id::text = ANY(CAST(:candidate_ids AS text[]))
+                  AND u.user_id::text = ANY(CAST(:population AS text[]))
                   AND NOT EXISTS (
                       SELECT 1 FROM matches m
                       WHERE m.tenant_id = :tid
@@ -335,22 +333,22 @@ async def hard_filter(
                   )
             """),
             {
-                "tid":          tenant_id,
-                "rid":          requester_id,
+                "tid":           tenant_id,
+                "rid":           requester_id,
                 "candidate_ids": candidate_ids,
-                "population":   population,
+                "population":    population,
             },
         )
     else:
-        # No explicit list — fall back to status='active' gate
         result = await safe_execute(
             db,
             text("""
                 SELECT DISTINCT u.user_id
                 FROM users u
-                WHERE u.tenant_id = :tid
-                  AND u.status = 'active'
-                  AND u.user_id::text = ANY(:candidate_ids)
+                JOIN user_tenants ut ON ut.user_id = u.user_id
+                WHERE ut.tenant_id = :tid
+                  AND ut.status = 'active'
+                  AND u.user_id::text = ANY(CAST(:candidate_ids AS text[]))
                   AND NOT EXISTS (
                       SELECT 1 FROM matches m
                       WHERE m.tenant_id = :tid
@@ -366,8 +364,8 @@ async def hard_filter(
                   )
             """),
             {
-                "tid":          tenant_id,
-                "rid":          requester_id,
+                "tid":           tenant_id,
+                "rid":           requester_id,
                 "candidate_ids": candidate_ids,
             },
         )
@@ -390,14 +388,15 @@ async def retrieve_candidates(
     query_text: str,
     transaction_type: str,
     max_candidates: int = 50,
-    population: Optional[List[str]] = None,   # ← Node-supplied active user list
+    population: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Hybrid retrieval: semantic search + gKG graph expansion + hard filter.
 
     population: when provided by Node, matchmaking is scoped to only these
                 user IDs. RAIN trusts Node's activity decision — no status
-                check is applied. When None, falls back to status='active'.
+                check is applied. When None, falls back to active members
+                of the tenant via user_tenants.
     """
 
     semantic_ids = await semantic_candidate_search(

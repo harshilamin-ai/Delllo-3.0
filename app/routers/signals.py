@@ -196,10 +196,10 @@ async def post_meeting_outcome(signal: SignalCreate, db: AsyncSession = Depends(
     result = await db.execute(
         text("""
             INSERT INTO live_signals (tenant_id, user_id, signal_type, payload_json, valid_to)
-            VALUES (:tid, :uid, 'meeting_outcome', CAST(:payload AS JSONB), NULL)
+            VALUES (:tid, :uid, 'meeting_outcome', CAST(:payload AS JSONB), :valid_to)
             RETURNING signal_id
         """),
-        {"tid": tid, "uid": uid, "payload": payload_json},
+        {"tid": tid, "uid": uid, "payload": payload_json, "valid_to": signal.valid_to},
     )
     row = result.mappings().first()
     signal_id = str(row["signal_id"])

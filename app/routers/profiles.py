@@ -289,10 +289,15 @@ async def update_profile(
     # Accept network_id as the new preferred field; tenant_id kept for back-compat
     raw_tid = req.network_id or req.tenant_id
     if not raw_tid:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either 'network_id' (preferred) or 'tenant_id' to scope fact writes."
-        )
+        return {
+            "user_id": uid,
+            "network_id": None,
+            "facts_written": 0,
+            "fact_breakdown": {},
+            "ikg_synced": False,
+            "ikg_error": "No network_id provided",
+            "intent_posted": False,
+        }
     tid = _norm(raw_tid) if _re.match(r'^[0-9a-f]{24}$', raw_tid, _re.I) else raw_tid
 
     # Verify user exists

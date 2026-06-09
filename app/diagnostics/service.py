@@ -221,9 +221,10 @@ async def run_selftest(
             text("""
                 SELECT u.user_id, COUNT(ef.fact_id) AS fact_count
                 FROM users u
+                JOIN user_tenants ut ON ut.user_id = u.user_id
                 LEFT JOIN extracted_facts ef
                     ON ef.user_id = u.user_id AND ef.tenant_id = :tid
-                WHERE u.user_id = :uid AND u.tenant_id = :tid
+                WHERE u.user_id = :uid AND ut.tenant_id = :tid AND ut.status = 'active'
                 GROUP BY u.user_id
             """),
             {"tid": tid, "uid": uid},

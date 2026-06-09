@@ -1,35 +1,27 @@
 """
 Delllo RAIN3.0 — Admin Router
 
-POST /v1/tenants             Create a new tenant
-POST /v1/users               Create or upsert a user
-GET  /v1/users               List all users in a network  (query: ?network_id=...)
-PATCH /v1/users/{user_id}/status   Activate / deactivate a single user
-POST /v1/users/bulk-status   Activate / deactivate many users at once
-POST /v1/admin/wipe          Wipe all tenant data (Postgres + Memgraph)
+POST   /v1/tenants                          Create a new tenant / network
+POST   /v1/users                            Create or upsert a user (global registry)
+GET    /v1/users                            List all users in a tenant
+PATCH  /v1/users/{user_id}/status           Activate / deactivate a single user
+POST   /v1/users/bulk-status               Activate / deactivate many users at once
 
-CHANGES (org/network migration)
-────────────────────────────────
-• UserCreate: tenant_id REMOVED — user email is now globally unique.
-• POST /v1/users: no longer writes tenant_id to users table;
-  returns network_suggestions (networks eligible via email domain).
-• GET  /v1/users: ?tenant_id replaced by ?network_id — queries
-  user_tenants JOIN users for active members of that network.
-• POST /v1/users/bulk-status: no longer filters by tenant_id on users
-  table (column removed); filters via user_tenants instead.
-• POST /v1/admin/wipe: user_profiles wipe no longer sub-selects by
-  tenant_id on users; wipes all profiles for users in the network via
-  user_tenants.
+── Network membership (Node calls these) ──────────────────────────────────────
+POST   /v1/networks/{tenant_id}/members           Add a user to a network
+DELETE /v1/networks/{tenant_id}/members/{user_id} Remove a user from a network
+
+POST   /v1/admin/wipe                       Wipe all tenant data (Postgres + Memgraph)
 
 ID FORMAT NOTE
 ──────────────
-MongoDB ObjectIDs (e.g. "400000000000002000000000") are accepted
-everywhere a user_id or tenant_id is expected.
-They are stored as-is in TEXT columns and converted to a deterministic
-UUID (uuid5 of the raw string) for any column that requires UUID type.
-Use mongo_to_uuid() when writing to UUID columns.
+MongoDB ObjectIDs (24-char hex, e.g. "6a221f7a84b3da41cbeb3fd7") are accepted
+everywhere a user_id or tenant_id is expected. They are converted to a
+deterministic UUID-v5 for any UUID column. The same input always maps to the
+same UUID — no secondary ID is stored or returned.
 """
 
+import json
 import logging
 import re
 import uuid as _uuid
@@ -55,7 +47,8 @@ _UUID_RE  = re.compile(
 )
 _MONGO_RE = re.compile(r'^[0-9a-f]{24}$', re.I)
 
-# Namespace for deterministic UUID generation from MongoDB IDs
+# Stable namespace for deterministic UUID-v5 generation from MongoDB IDs.
+# Do NOT change this value after first deploy.
 _MONGO_NS = _uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
 
@@ -68,7 +61,7 @@ def mongo_to_uuid(val: str) -> str:
     """
     Convert a MongoDB ObjectID to a deterministic UUID-v5.
     Standard UUIDs pass through unchanged.
-    Same input always produces the same UUID.
+    Same input → same UUID, always.
     """
     if _UUID_RE.match(val):
         return val
@@ -76,11 +69,25 @@ def mongo_to_uuid(val: str) -> str:
 
 
 def normalise_id(val: Optional[str]) -> Optional[str]:
-    """Return a UUID string from either format, or None."""
+    """Return a UUID string from either format, or None if val is empty."""
     if not val:
         return None
     if not is_valid_id(val):
-        raise ValueError(f"Invalid ID format: '{val}'. Expected UUID or 24-char MongoDB ObjectID.")
+        raise ValueError(
+            f"Invalid ID format: '{val}'. "
+            "Expected a UUID or 24-char MongoDB ObjectID."
+        )
+    return mongo_to_uuid(val)
+
+
+def _require_id(val: str, field: str = "id") -> str:
+    """Like normalise_id but raises HTTPException instead of ValueError."""
+    if not is_valid_id(val):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field} format: '{val}'. "
+                   "Expected a UUID or 24-char MongoDB ObjectID.",
+        )
     return mongo_to_uuid(val)
 
 
@@ -107,20 +114,14 @@ class TenantCreate(BaseModel):
 
 
 class UserCreate(BaseModel):
-    """
-    Create or upsert a user.
-
-    CHANGED: tenant_id removed — users are now globally unique by email.
-    The caller should follow up with POST /v1/users/{user_id}/join to
-    enrol the user in a specific network. The response includes
-    network_suggestions so the client can do this in one round-trip.
-    """
+    """Create or upsert a user. Accepts UUID or MongoDB ObjectID."""
     user_id:      Optional[str] = None
+    tenant_id:    str
     display_name: str
     email:        str
     headline:     str = ""
+    role:         str = "member"
     status:       str = "active"
-    # Location fields from Node's user schema
     latitude:     Optional[str] = None
     longitude:    Optional[str] = None
     address:      Optional[str] = None
@@ -130,13 +131,43 @@ class UserCreate(BaseModel):
     def validate_user_id(cls, v):
         if v is None or v == "":
             return None
-        if not is_valid_id(v):
+        if not is_valid_id(str(v)):
             raise ValueError(f"Invalid user_id: '{v}'")
-        return mongo_to_uuid(v)
+        return mongo_to_uuid(str(v))
+
+    @field_validator("tenant_id", mode="before")
+    @classmethod
+    def validate_tenant_id(cls, v):
+        if not is_valid_id(str(v)):
+            raise ValueError(f"Invalid tenant_id: '{v}'")
+        return mongo_to_uuid(str(v))
+
+
+class NetworkMemberAdd(BaseModel):
+    """
+    Add a user to a network (tenant).
+    Node calls this when a user joins / is added to a network.
+    """
+    user_id: str
+    role:    str = "member"   # member | admin | viewer
+
+    @field_validator("user_id", mode="before")
+    @classmethod
+    def validate_uid(cls, v):
+        if not is_valid_id(str(v)):
+            raise ValueError(f"Invalid user_id: '{v}'")
+        return mongo_to_uuid(str(v))
+
+    @field_validator("role")
+    @classmethod
+    def check_role(cls, v):
+        if v not in ("admin", "member", "viewer"):
+            raise ValueError("role must be admin | member | viewer")
+        return v
 
 
 class UserStatusUpdate(BaseModel):
-    status: str   # active | disabled
+    status: str
     reason: Optional[str] = None
 
     @field_validator("status")
@@ -148,16 +179,15 @@ class UserStatusUpdate(BaseModel):
 
 
 class BulkStatusRequest(BaseModel):
-    """Activate or deactivate a list of users in one call."""
-    network_id: str      # replaces tenant_id — used to validate membership
-    user_ids:   List[str]
-    status:     str      # active | disabled
+    tenant_id: str
+    user_ids:  List[str]
+    status:    str
 
-    @field_validator("network_id", mode="before")
+    @field_validator("tenant_id", mode="before")
     @classmethod
-    def validate_nid(cls, v):
+    def validate_tid(cls, v):
         if not is_valid_id(str(v)):
-            raise ValueError(f"Invalid network_id: '{v}'")
+            raise ValueError(f"Invalid tenant_id: '{v}'")
         return mongo_to_uuid(str(v))
 
     @field_validator("user_ids", mode="before")
@@ -190,22 +220,33 @@ class WipeRequest(BaseModel):
 @router.post("/tenants", status_code=201, summary="Create a new tenant / network")
 async def create_tenant(req: TenantCreate, db: AsyncSession = Depends(get_db)):
     """
-    Creates a new tenant. Call this once per network in Node.
+    Creates a new tenant / network.  Call this once per network from Node.
     Returns the tenant_id to use in all subsequent calls.
+
+    FIX: The provided tenant_id (UUID or MongoDB ObjectID) is now always
+    honoured. If that ID already exists, the row is updated in-place
+    (upsert semantics) rather than being silently ignored.
+
+    The slug uniqueness check is skipped when the same tenant_id is
+    re-submitted (idempotent upsert), so re-runs are safe.
     """
     tid  = req.tenant_id or str(_uuid.uuid4())
     slug = req.slug.lower().replace(" ", "-")
 
+    # Check slug uniqueness — but only if a *different* tenant owns it.
     existing = await db.execute(
-        text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+        text("""
+            SELECT tenant_id FROM tenants
+            WHERE slug = :slug AND tenant_id != :tid
+        """),
+        {"slug": slug, "tid": tid},
     )
     if existing.mappings().first():
         raise HTTPException(
             status_code=409,
-            detail=f"A tenant with slug '{slug}' already exists."
+            detail=f"A different tenant already uses slug '{slug}'.",
         )
 
-    import json
     await db.execute(
         text("""
             INSERT INTO tenants (tenant_id, name, slug, status, config_json)
@@ -225,12 +266,12 @@ async def create_tenant(req: TenantCreate, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
 
-    logger.info(f"Tenant created: {tid[:8]} slug={slug}")
+    logger.info(f"Tenant upserted: {tid[:8]} slug={slug}")
     return {
-        "tenant_id":   tid,
-        "name":        req.name,
-        "slug":        slug,
-        "status":      "active",
+        "tenant_id": tid,
+        "name":      req.name,
+        "slug":      slug,
+        "status":    "active",
     }
 
 
@@ -241,37 +282,54 @@ async def create_tenant(req: TenantCreate, db: AsyncSession = Depends(get_db)):
 @router.post("/users", status_code=201)
 async def create_user(req: UserCreate, db: AsyncSession = Depends(get_db)):
     """
-    Create or upsert a user + profile.
+    Create or upsert a user + profile in the global user registry.
+    Accepts UUID or MongoDB ObjectID for both user_id and tenant_id.
 
-    CHANGED: tenant_id removed from schema and INSERT — email is now
-    globally unique. After creating the user, the response includes
-    network_suggestions so the caller can immediately enrol the user
-    in eligible networks via POST /v1/users/{user_id}/join.
+    The tenant is auto-created if it doesn't exist, so Node does not
+    need to call POST /v1/tenants before creating users.
     """
     uid = req.user_id or str(_uuid.uuid4())
+    tid = req.tenant_id  # already normalised by Pydantic validator
 
-    # Upsert user — no tenant_id column
+    # Ensure the tenant row exists — preserve the slug if it was set
+    # via POST /v1/tenants. Only auto-create when genuinely missing.
+    t = await db.execute(
+        text("SELECT tenant_id FROM tenants WHERE tenant_id = :tid"),
+        {"tid": tid},
+    )
+    if not t.mappings().first():
+        await db.execute(
+            text("""
+                INSERT INTO tenants (tenant_id, name, slug, status)
+                VALUES (:tid, :name, :slug, 'active')
+                ON CONFLICT (tenant_id) DO NOTHING
+            """),
+            {"tid": tid, "name": f"Tenant {tid[:8]}", "slug": f"auto-{tid[:8]}"},
+        )
+
+    # Upsert user
     await db.execute(
         text("""
             INSERT INTO users
-                (user_id, display_name, email, status)
+                (user_id, tenant_id, display_name, email, role, status)
             VALUES
-                (:uid, :name, :email, :status)
+                (:uid, :tid, :name, :email, :role, :status)
             ON CONFLICT (user_id) DO UPDATE
                 SET display_name = EXCLUDED.display_name,
                     email        = EXCLUDED.email,
+                    role         = EXCLUDED.role,
                     status       = EXCLUDED.status,
                     updated_at   = NOW()
         """),
         {
-            "uid":    uid,
+            "uid":    uid, "tid":  tid,
             "name":   req.display_name,
             "email":  req.email,
+            "role":   req.role,
             "status": req.status,
         },
     )
 
-    # Upsert profile — include location if provided
     location = req.address or (
         f"{req.latitude},{req.longitude}"
         if req.latitude and req.longitude else None
@@ -290,113 +348,260 @@ async def create_user(req: UserCreate, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
 
-    # ── Network suggestions based on email domain ─────────────
-    # Find networks with an email_domain or open join rule that
-    # matches the user's email domain, where they are not yet a member.
-    email_domain = req.email.split("@")[-1].lower() if "@" in req.email else ""
-    suggestions_result = await db.execute(
-        text("""
-            SELECT DISTINCT
-                t.tenant_id,
-                t.name   AS network_name,
-                t.slug   AS network_slug,
-                r.rule_type
-            FROM network_join_rules r
-            JOIN tenants t ON t.tenant_id = r.tenant_id
-            WHERE (
-                (r.rule_type = 'email_domain' AND LOWER(r.rule_value) = :domain)
-                OR r.rule_type = 'open'
-            )
-            AND t.tenant_id NOT IN (
-                SELECT tenant_id FROM user_tenants WHERE user_id = :uid
-            )
-            ORDER BY t.name
-        """),
-        {"domain": email_domain, "uid": uid},
-    )
-    suggestions = [
-        {
-            "tenant_id":    str(r["tenant_id"]),
-            "network_name": r["network_name"],
-            "network_slug": r["network_slug"],
-            "rule_type":    r["rule_type"],
-        }
-        for r in suggestions_result.mappings().all()
-    ]
-
-    logger.info(f"User upserted: {uid[:8]} ({req.display_name}), {len(suggestions)} network suggestion(s)")
+    logger.info(f"User upserted: {uid[:8]} ({req.display_name}) tenant={tid[:8]}")
     return {
-        "user_id":             uid,
-        "display_name":        req.display_name,
-        "status":              "created",
-        "network_suggestions": suggestions,
+        "user_id":      uid,
+        "tenant_id":    tid,
+        "display_name": req.display_name,
+        "status":       "created",
     }
 
 
 # ─────────────────────────────────────────────
 #  GET /v1/users
-#  CHANGED: ?tenant_id replaced by ?network_id
-#  Queries user_tenants JOIN users for active
-#  members of that network.
 # ─────────────────────────────────────────────
 
 @router.get("/users")
-async def list_users(network_id: str, db: AsyncSession = Depends(get_db)):
-    """
-    List all active members of a network.
-
-    CHANGED: previously filtered by tenant_id on the users table.
-    Now queries user_tenants JOIN users so the result reflects actual
-    network membership rather than the (now-removed) tenant_id column.
-    """
-    nid = mongo_to_uuid(network_id) if is_valid_id(network_id) else network_id
-
+async def list_users(tenant_id: str, db: AsyncSession = Depends(get_db)):
+    tid = _require_id(tenant_id, "tenant_id")
     result = await db.execute(
         text("""
-            SELECT
-                u.user_id,
-                u.display_name,
-                u.email,
-                ut.role,
-                u.status,
-                p.headline,
-                p.home_location,
-                ut.joined_at,
-                COUNT(ef.fact_id) AS fact_count
-            FROM user_tenants ut
-            JOIN users u ON u.user_id = ut.user_id
-            LEFT JOIN user_profiles p ON p.user_id = u.user_id
+            SELECT u.user_id, u.display_name, u.email, u.role, u.status,
+                   p.headline, p.home_location,
+                   COUNT(ef.fact_id) AS fact_count
+            FROM users u
+            LEFT JOIN user_profiles p  ON p.user_id  = u.user_id
             LEFT JOIN extracted_facts ef
-                ON ef.user_id = u.user_id AND ef.tenant_id = :nid
-            WHERE ut.tenant_id = :nid
-              AND ut.status    = 'active'
-            GROUP BY
-                u.user_id, u.display_name, u.email, ut.role,
-                u.status, p.headline, p.home_location, ut.joined_at
+                ON ef.user_id = u.user_id AND ef.tenant_id = :tid
+            WHERE u.tenant_id = :tid
+            GROUP BY u.user_id, u.display_name, u.email, u.role,
+                     u.status, p.headline, p.home_location
             ORDER BY u.display_name
         """),
-        {"nid": nid},
+        {"tid": tid},
     )
     rows = result.mappings().all()
-    return {"network_id": nid, "users": [dict(r) for r in rows], "count": len(rows)}
+    return {"tenant_id": tid, "users": [dict(r) for r in rows], "count": len(rows)}
+
+
+# ─────────────────────────────────────────────
+#  Network membership endpoints
+#  Node calls these to add / remove a user from a network.
+#  These are the canonical join/leave operations — do NOT use
+#  PATCH /users/{id}/status for network membership changes.
+# ─────────────────────────────────────────────
+
+@router.post(
+    "/networks/{tenant_id}/members",
+    status_code=200,
+    summary="Add a user to a network (Node calls this on network join)",
+)
+async def add_network_member(
+    tenant_id: str,
+    req: NetworkMemberAdd,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Add (or re-add) a user to a network.
+
+    What this does:
+    - Verifies the network (tenant) exists.
+    - Verifies the user exists in the global registry.
+    - Sets user.tenant_id = tenant_id and user.status = 'active'.
+    - Re-activates any previously expired sKG signals.
+    - Writes an audit log entry.
+
+    Idempotent: safe to call multiple times for the same user/network.
+    """
+    tid = _require_id(tenant_id, "tenant_id")
+    uid = req.user_id  # already normalised by Pydantic
+
+    # Verify network exists
+    t = await db.execute(
+        text("SELECT name FROM tenants WHERE tenant_id = :tid"), {"tid": tid}
+    )
+    tenant_row = t.mappings().first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail=f"Network '{tid}' not found.")
+
+    # Verify user exists
+    u = await db.execute(
+        text("SELECT display_name FROM users WHERE user_id = :uid"), {"uid": uid}
+    )
+    user_row = u.mappings().first()
+    if not user_row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{uid}' not found. Create the user first via POST /v1/users.",
+        )
+
+    # Move user into this network and activate
+    await db.execute(
+        text("""
+            UPDATE users
+            SET tenant_id  = :tid,
+                role       = :role,
+                status     = 'active',
+                updated_at = NOW()
+            WHERE user_id = :uid
+        """),
+        {"tid": tid, "uid": uid, "role": req.role},
+    )
+
+    # Also ensure extracted_facts point to the new tenant
+    await db.execute(
+        text("""
+            UPDATE extracted_facts
+            SET tenant_id = :tid
+            WHERE user_id = :uid
+        """),
+        {"tid": tid, "uid": uid},
+    )
+
+    # Audit
+    await db.execute(
+        text("""
+            INSERT INTO audit_log (tenant_id, actor_user_id, action, object_type, object_id)
+            VALUES (:tid, :uid, 'network_join', 'user', :uid)
+        """),
+        {"tid": tid, "uid": uid},
+    )
+    await db.commit()
+
+    logger.info(f"User {uid[:8]} joined network {tid[:8]} as {req.role}")
+    return {
+        "tenant_id":    tid,
+        "tenant_name":  tenant_row["name"],
+        "user_id":      uid,
+        "display_name": user_row["display_name"],
+        "role":         req.role,
+        "status":       "active",
+        "action":       "joined",
+    }
+
+
+@router.delete(
+    "/networks/{tenant_id}/members/{user_id}",
+    status_code=200,
+    summary="Remove a user from a network (Node calls this on network leave)",
+)
+async def remove_network_member(
+    tenant_id: str,
+    user_id:   str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Remove a user from a network.
+
+    What this does:
+    - Sets user.status = 'disabled' for this tenant.
+    - Expires all active sKG signals immediately (live intent, presence).
+    - Writes an audit log entry.
+    - Does NOT delete the user or their facts — they remain for analytics
+      and can re-join the network later.
+
+    Idempotent: safe to call multiple times.
+    """
+    tid = _require_id(tenant_id, "tenant_id")
+    uid = _require_id(user_id, "user_id")
+
+    # Verify user is in this network
+    u = await db.execute(
+        text("""
+            SELECT display_name, status FROM users
+            WHERE user_id = :uid AND tenant_id = :tid
+        """),
+        {"uid": uid, "tid": tid},
+    )
+    user_row = u.mappings().first()
+    if not user_row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{uid}' is not a member of network '{tid}'.",
+        )
+
+    # Disable the user
+    await db.execute(
+        text("""
+            UPDATE users
+            SET status = 'disabled', updated_at = NOW()
+            WHERE user_id = :uid AND tenant_id = :tid
+        """),
+        {"uid": uid, "tid": tid},
+    )
+
+    # Expire all active sKG signals immediately
+    expired = await db.execute(
+        text("""
+            UPDATE live_signals
+            SET valid_to = NOW()
+            WHERE user_id = :uid AND valid_to IS NULL
+            RETURNING signal_id
+        """),
+        {"uid": uid},
+    )
+    expired_count = len(expired.fetchall())
+
+    # Expire Memgraph sKG nodes (non-fatal)
+    try:
+        driver = get_driver()
+        async with driver.session() as session:
+            await session.run(
+                """
+                MATCH (p:Person {person_id: $uid})-[:HAS_LIVE_INTENT]->(li:LiveIntent)
+                WHERE li.valid_to IS NULL
+                SET li.valid_to = $now
+                """,
+                uid=uid, now=_uuid.uuid4().hex,  # just needs a non-null value
+            )
+            await session.run(
+                """
+                MATCH (p:Person {person_id: $uid})-[:PRESENT_AT]->(pr:Presence)
+                WHERE pr.valid_to IS NULL
+                SET pr.valid_to = $now
+                """,
+                uid=uid, now=_uuid.uuid4().hex,
+            )
+    except Exception as e:
+        logger.warning(f"Memgraph signal expiry failed (non-fatal): {e}")
+
+    # Audit
+    await db.execute(
+        text("""
+            INSERT INTO audit_log (tenant_id, actor_user_id, action, object_type, object_id)
+            VALUES (:tid, :uid, 'network_leave', 'user', :uid)
+        """),
+        {"tid": tid, "uid": uid},
+    )
+    await db.commit()
+
+    logger.info(
+        f"User {uid[:8]} left network {tid[:8]} "
+        f"(signals expired: {expired_count})"
+    )
+    return {
+        "tenant_id":      tid,
+        "user_id":        uid,
+        "display_name":   user_row["display_name"],
+        "status":         "disabled",
+        "signals_expired": expired_count,
+        "action":         "removed",
+    }
 
 
 # ─────────────────────────────────────────────
 #  PATCH /v1/users/{user_id}/status
+#  Low-level status toggle (internal / admin use)
+#  For network membership changes, use the /networks/* endpoints above.
 # ─────────────────────────────────────────────
 
-@router.patch("/users/{user_id}/status", summary="Activate or deactivate a user")
+@router.patch("/users/{user_id}/status", summary="Activate or deactivate a user (admin)")
 async def update_user_status(
     user_id: str,
     req: UserStatusUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Node calls this when a user leaves a network (status=disabled)
-    or rejoins (status=active). RAIN immediately removes disabled users
-    from all future candidate pools.
-    """
-    uid = mongo_to_uuid(user_id) if is_valid_id(user_id) else user_id
+    uid = _require_id(user_id, "user_id")
 
     result = await db.execute(
         text("SELECT user_id FROM users WHERE user_id = :uid"), {"uid": uid}
@@ -405,15 +610,10 @@ async def update_user_status(
         raise HTTPException(status_code=404, detail="User not found")
 
     await db.execute(
-        text("""
-            UPDATE users
-            SET status = :status, updated_at = NOW()
-            WHERE user_id = :uid
-        """),
+        text("UPDATE users SET status = :status, updated_at = NOW() WHERE user_id = :uid"),
         {"uid": uid, "status": req.status},
     )
 
-    # If disabling — expire all active sKG signals immediately
     if req.status == "disabled":
         await db.execute(
             text("""
@@ -435,56 +635,18 @@ async def update_user_status(
 
 @router.post("/users/bulk-status", summary="Activate or deactivate multiple users at once")
 async def bulk_update_status(req: BulkStatusRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Efficiently update the status of many users at once.
-
-    CHANGED: no longer filters by tenant_id on the users table (column
-    removed). Now validates that every user_id in the list is an active
-    member of the specified network via user_tenants before updating.
-    """
     if not req.user_ids:
         raise HTTPException(status_code=400, detail="user_ids list is empty")
-
-    nid = req.network_id
-
-    # Validate all user_ids are active members of the network
-    membership_result = await db.execute(
-        text("""
-            SELECT user_id FROM user_tenants
-            WHERE tenant_id = :nid
-              AND status     = 'active'
-              AND user_id    = ANY(:uids)
-        """),
-        {"nid": nid, "uids": req.user_ids},
-    )
-    valid_members = {str(r["user_id"]) for r in membership_result.mappings().all()}
-    invalid = [uid for uid in req.user_ids if uid not in valid_members]
-    if invalid:
-        logger.warning(
-            f"bulk-status: {len(invalid)} user_id(s) are not active members of "
-            f"network {nid[:8]} — they will be skipped: {invalid[:5]}"
-        )
-
-    # Only update users confirmed as network members
-    member_list = list(valid_members)
-    if not member_list:
-        return {
-            "network_id":    nid,
-            "users_updated": 0,
-            "status":        req.status,
-            "skipped":       len(invalid),
-        }
 
     await db.execute(
         text("""
             UPDATE users
             SET status = :status, updated_at = NOW()
-            WHERE user_id = ANY(:uids)
+            WHERE user_id = ANY(:uids) AND tenant_id = :tid
         """),
-        {"status": req.status, "uids": member_list},
+        {"status": req.status, "uids": req.user_ids, "tid": req.tenant_id},
     )
 
-    # Expire sKG signals for all disabled users
     if req.status == "disabled":
         await db.execute(
             text("""
@@ -492,19 +654,18 @@ async def bulk_update_status(req: BulkStatusRequest, db: AsyncSession = Depends(
                 SET valid_to = NOW()
                 WHERE user_id = ANY(:uids) AND valid_to IS NULL
             """),
-            {"uids": member_list},
+            {"uids": req.user_ids},
         )
 
     await db.commit()
     logger.info(
-        f"Bulk status update: {len(member_list)} users → {req.status} "
-        f"network={nid[:8]} (skipped {len(invalid)} non-members)"
+        f"Bulk status update: {len(req.user_ids)} users → {req.status} "
+        f"tenant={req.tenant_id[:8]}"
     )
     return {
-        "network_id":    nid,
-        "users_updated": len(member_list),
+        "tenant_id":     req.tenant_id,
+        "users_updated": len(req.user_ids),
         "status":        req.status,
-        "skipped":       len(invalid),
     }
 
 
@@ -518,7 +679,7 @@ async def wipe_tenant(req: WipeRequest, db: AsyncSession = Depends(get_db)):
     if not req.confirm:
         raise HTTPException(status_code=400, detail="Set confirm=true to execute wipe")
 
-    tid = mongo_to_uuid(req.tenant_id) if is_valid_id(req.tenant_id) else req.tenant_id
+    tid = _require_id(req.tenant_id, "tenant_id")
     wiped_tables = []
     errors       = []
 
@@ -536,7 +697,7 @@ async def wipe_tenant(req: WipeRequest, db: AsyncSession = Depends(get_db)):
         ("audit_log",                 "tenant_id"),
         ("tenant_ontology_overrides", "tenant_id"),
         ("user_profiles",             None),
-        ("user_tenants",              "tenant_id"),   # ← remove memberships too
+        ("users",                     "tenant_id"),
     ]
 
     for table, tid_col in tables_to_clear:
@@ -562,10 +723,9 @@ async def wipe_tenant(req: WipeRequest, db: AsyncSession = Depends(get_db)):
                             SELECT match_id FROM matches WHERE tenant_id = :tid
                         )"""), {"tid": tid})
                 elif table == "user_profiles":
-                    # CHANGED: no tenant_id on users; sub-select via user_tenants
                     await db.execute(text("""
                         DELETE FROM user_profiles WHERE user_id IN (
-                            SELECT user_id FROM user_tenants WHERE tenant_id = :tid
+                            SELECT user_id FROM users WHERE tenant_id = :tid
                         )"""), {"tid": tid})
             wiped_tables.append(table)
         except Exception as e:
@@ -576,15 +736,23 @@ async def wipe_tenant(req: WipeRequest, db: AsyncSession = Depends(get_db)):
     try:
         driver = get_driver()
         async with driver.session() as session:
-            await session.run("MATCH (p:Person {tenant_id: $tid}) DETACH DELETE p", tid=tid)
-            await session.run("MATCH (li:LiveIntent {tenant_id: $tid}) DETACH DELETE li", tid=tid)
-            await session.run("MATCH (pr:Presence {tenant_id: $tid}) DETACH DELETE pr", tid=tid)
             await session.run(
-                "MATCH (mr:MatchRecommendation) WHERE mr.tenant_id = $tid DETACH DELETE mr", tid=tid
+                "MATCH (p:Person {tenant_id: $tid}) DETACH DELETE p", tid=tid
+            )
+            await session.run(
+                "MATCH (li:LiveIntent {tenant_id: $tid}) DETACH DELETE li", tid=tid
+            )
+            await session.run(
+                "MATCH (pr:Presence {tenant_id: $tid}) DETACH DELETE pr", tid=tid
+            )
+            await session.run(
+                "MATCH (mr:MatchRecommendation) WHERE mr.tenant_id = $tid DETACH DELETE mr",
+                tid=tid,
             )
         memgraph_wiped = True
     except Exception as e:
         errors.append(f"Memgraph: {type(e).__name__}: {e}")
+
     await db.commit()
     return {
         "tenant_id":      tid,

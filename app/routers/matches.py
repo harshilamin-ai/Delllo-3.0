@@ -344,8 +344,6 @@ async def generate_matches(
             "matches":         [],
             "score_version":   "v2.0",
         }
-    await db.rollback()
-
     # ── Steps 3+4+5: Persist, explain, oKG ───────────────────
     driver          = get_driver()
     created_matches = []
@@ -421,9 +419,8 @@ async def generate_matches(
             await graph_writer.upsert_match_recommendation(
                 driver,
                 match_id=match_id,
-                person_a=requester_id,
-                person_b=candidate_id,
-                tenant_id=network_id,
+                person_a_id=requester_id,
+                person_b_id=candidate_id,
                 score=score,
                 transaction_type=tx_type,
             )

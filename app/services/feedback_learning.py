@@ -19,7 +19,6 @@ Background:  run_learning_sweep() can be triggered nightly to
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -73,7 +72,6 @@ async def compute_user_outcome_score(
     if not rows:
         return 0.5   # no history — neutral prior
 
-    now        = datetime.now(timezone.utc)
     total_w    = 0.0
     weighted_s = 0.0
     decay      = 0.95   # each older event counts 5% less
@@ -183,7 +181,9 @@ async def run_learning_sweep(db: AsyncSession, tenant_id: str) -> dict:
         text("""
             SELECT DISTINCT u.user_id
             FROM users u
-            WHERE u.tenant_id = :tid AND u.status = 'active'
+            JOIN user_tenants ut ON ut.user_id = u.user_id
+            WHERE ut.tenant_id = :tid
+              AND ut.status = 'active'
         """),
         {"tid": tenant_id},
     )

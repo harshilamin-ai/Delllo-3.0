@@ -663,10 +663,11 @@ async def upsert_match_recommendation(
             """
             MATCH (mr:MatchRecommendation {match_id: $match_id})
             MATCH (tt:TransactionType)
-            WHERE tt.type_id = 'tt_' + $tt OR tt.name = $tt
+            WHERE tt.type_id = $tt_prefixed OR tt.name = $tt
             MERGE (mr)-[:OF_TYPE]->(tt)
             """,
             match_id=match_id, tt=transaction_type,
+            tt_prefixed=f"tt_{transaction_type}",
         )
         await r.consume()
 async def update_match_status(
