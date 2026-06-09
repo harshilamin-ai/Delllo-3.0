@@ -1,0 +1,162 @@
+# ─────────────────────────────────────────────
+#  Delllo RAIN3.0 — Local Dev Stack
+#  Services: PostgreSQL+pgvector, Memgraph,
+#             MinIO, Prometheus, Grafana
+# ─────────────────────────────────────────────
+
+services:
+
+  # ── Relational + Vector DB ────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: delllo_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-delllo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-delllo_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-delllo_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-delllo} -d ${POSTGRES_DB:-delllo_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - delllo_net
+
+  # ── Graph DB ──────────────────────────────
+  memgraph:
+    image: memgraph/memgraph:2.14.0
+    container_name: delllo_memgraph
+    restart: unless-stopped
+    ports:
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/7687'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+      - memgraph_log:/var/log/memgraph
+    command: ["--log-level=WARNING"]
+    networks:
+      - delllo_net
+
+  # ── Object Storage ────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: delllo_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - delllo_net
+  minio:
+    image: minio/minio:latest
+    container_name: delllo_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_secret}
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console UI
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - delllo_net
+
+  # ── Observability ─────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: delllo_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - delllo_net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: delllo_grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin_secret}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - delllo_net
+
+  # ── FastAPI App ───────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: delllo_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-delllo}:${POSTGRES_PASSWORD:-delllo_secret}@postgres:5432/${POSTGRES_DB:-delllo_db}
+      - MEMGRAPH_HOST=memgraph
+      - MEMGRAPH_PORT=7687
+      - MEMGRAPH_USER=${MEMGRAPH_USER:-memgraph}
+      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD:-memgraph_secret}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minio_secret}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ENVIRONMENT=development
+    volumes:
+      - ./app:/app/app
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+      memgraph:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - delllo_net
+
+volumes:
+  postgres_data:
+  memgraph_data:
+  memgraph_log:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  ollama_data:
+
+networks:
+  delllo_net:
+    driver: bridge
