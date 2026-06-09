@@ -82,7 +82,7 @@ CREATE TABLE extracted_facts (
     user_id               UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     fact_type             TEXT NOT NULL CHECK (fact_type IN (
                               'skill', 'domain', 'objective', 'offer', 'achievement',
-                              'constraint', 'need', 'topic', 'location'
+                              'constraint', 'need', 'topic', 'location', 'asset', 'project'
                           )),
     canonical_value       TEXT NOT NULL,                     -- normalized e.g. "ml_credit_pricing"
     raw_value             TEXT NOT NULL,                     -- extracted phrase verbatim
@@ -234,3 +234,23 @@ VALUES
      0.91,
      'match_engine_only',
      true);
+
+-- ── Tenant Ontology Overrides ─────────────────────────────────
+-- Bug #5 fix: this table was missing from init_db.sql (was only in phase2_migration.sql)
+CREATE TABLE IF NOT EXISTS tenant_ontology_overrides (
+    override_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id           UUID NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    override_type       TEXT NOT NULL
+        CHECK (override_type IN (
+            'weight_boost', 'weight_reduce', 'capability_add',
+            'capability_block', 'tx_type_disable'
+        )),
+    transaction_type_id TEXT NOT NULL,
+    target_capability   TEXT,
+    weight_delta        FLOAT,
+    reason              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ontology_overrides_tenant
+    ON tenant_ontology_overrides (tenant_id);
